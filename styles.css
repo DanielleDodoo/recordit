@@ -125,3 +125,10 @@ header{height:64px}h1,.page-heading h1{font-size:40px;letter-spacing:-1.3px}.pag
 /* Live lines, finished or still in progress, respond to a tap; a long press doesn't start selecting text instead. */
 .live-words p.interim{cursor:pointer}
 .live-words p[data-t],.live-words p.interim{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+
+/* Highlighted live lines are unmistakable: highlighter yellow, bold, with a star. Every line has the same padding,
+   so highlighting doesn't make the text jump. ★ Highlight turns yellow for a moment when it has marked something. */
+.live-words p[data-t],.live-words p.interim{padding:6px 10px;margin:0 0 4px;border-radius:8px}
+.live-words p.marked{background:#ffd93d;color:#1d1d1b;font-weight:600;padding:6px 10px}
+.live-words p.marked::before{content:'★ '}
+.moment-actions button.done{background:#ffd93d;border-color:#e0b400;color:#1d1d1b}

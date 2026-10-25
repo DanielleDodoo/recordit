@@ -470,7 +470,7 @@ function endLiveWords(message){liveWanted=false;commitInterim();if(!liveWords)re
 function pauseLive(){commitInterim();if(!liveWords)return;liveWords.stop();liveWords=null;addLiveLine('Paused','live-note');}
 function resumeLive(){if(liveWanted&&!liveWords&&recording&&recorder?.state==='recording')startLive();}
 function beginMoments(note,{live=true}={}){
- note.moments=restoreMoments(note.moments);lastAudioAt=0;$('moment-actions').hidden=false;$('live-words').replaceChildren();$('live-words-option').hidden=true;showMomentCount(note);
+ note.moments=restoreMoments(note.moments);lastAudioAt=0;lastHighlightAt=-Infinity;$('moment-actions').hidden=false;$('live-words').replaceChildren();$('live-words-option').hidden=true;showMomentCount(note);
  if(!live||!$('live-words-on').checked)return;
  $('live-words').hidden=false;liveWanted=true;
  if(liveWordsSupported)addLiveLine('Tap any line to highlight it.','live-note');
@@ -519,7 +519,7 @@ function markMoment(kind,text='',t=elapsed,line=null){
 function toggleLineHighlight(line){
  const note=recording;if(!note)return;
  if(line.dataset.moment){note.moments=removeMoment(note.moments,line.dataset.moment);delete line.dataset.moment;line.classList.remove('marked');line.setAttribute('aria-pressed','false');saving=saving.then(()=>db.save(note)).catch(()=>{});showMomentCount(note);}
- else markMoment('highlight',line.textContent,Number(line.dataset.t),line);
+ else{markMoment('highlight',line.textContent,Number(line.dataset.t),line);lastHighlightAt=elapsed;}
 }
 // A tap on grey words in progress makes them a line of their own and highlights it.
 const tapped=target=>{const line=target.closest('p[data-t], p.interim');return line?.classList.contains('interim')?commitInterim():line;};
@@ -537,10 +537,16 @@ document.addEventListener('visibilitychange',()=>{
 });
 $('live-words-option').hidden=!liveWordsSupported;try{$('live-words-on').checked=localStorage.liveWords!=='off';}catch{}
 $('live-words-on').onchange=()=>{try{localStorage.liveWords=$('live-words-on').checked?'on':'off';}catch{}};
+// ★ Highlight turns yellow for a moment and says what it did. Pressed again with nothing new said, it doesn't mark twice.
+let highlightFlash=null,lastHighlightAt=-Infinity;
+function flashHighlight(text){const button=$('mark-highlight');button.textContent=text;button.classList.add('done');clearTimeout(highlightFlash);highlightFlash=setTimeout(()=>{button.textContent='★ Highlight';button.classList.remove('done');},1600);}
 $('mark-highlight').onclick=()=>{
+ if(elapsed-lastHighlightAt<4)return flashHighlight('★ Already highlighted');   // a second press straight after is a check, not a new highlight
  const last=[...$('live-words').querySelectorAll('p[data-t]')].at(-1),recent=last&&!last.dataset.moment&&Date.now()-Number(last.dataset.added)<8000?last:null;
  const line=commitInterim()??recent;
- if(line)markMoment('highlight',line.textContent,Number(line.dataset.t),line);else markMoment('highlight');
+ if(line){markMoment('highlight',line.textContent,Number(line.dataset.t),line);lastHighlightAt=elapsed;return flashHighlight('★ Highlighted');}
+ if(elapsed-lastHighlightAt<8)return flashHighlight('★ Already highlighted');
+ markMoment('highlight');lastHighlightAt=elapsed;flashHighlight('★ Highlighted');
 };
 $('mark-note').onclick=()=>{noteMomentAt=elapsed;$('moment-note-form').hidden=false;$('moment-note-text').value='';$('moment-note-text').focus();};
 $('moment-note-cancel').onclick=()=>{$('moment-note-form').hidden=true;};
