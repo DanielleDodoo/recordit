@@ -38,7 +38,7 @@ export function validateBackup(value){
 // Earlier transcripts, new-engine details and microphone settings travel with backups and library transfers.
 function restoredRecordingFields(value){
  const fields={},versions=restoreVersions(value.transcriptVersions),gaps=restoreGaps(value.speechGaps),mic=restoreMic(value.mic),moments=restoreMoments(value.moments);
- if(versions.length)fields.transcriptVersions=versions;if(gaps.length)fields.speechGaps=gaps;if(mic)fields.mic=mic;if(moments.length)fields.moments=moments;
+ if(versions.length)fields.transcriptVersions=versions;if(gaps.length)fields.speechGaps=gaps;if(mic)fields.mic=mic;if(moments.length)fields.moments=moments;if(value.titleAuto===true)fields.titleAuto=true;
  if(typeof value.transcriptVersionId==='string'&&/^[a-zA-Z0-9-]{1,80}$/.test(value.transcriptVersionId))fields.transcriptVersionId=value.transcriptVersionId;
  for(const key of ['transcriptEngine','transcriptEngineLabel'])if(typeof value[key]==='string'&&value[key].length<=80)fields[key]=value[key];
  if(Number.isFinite(value.transcribed))fields.transcribed=value.transcribed; return fields;

@@ -9,7 +9,7 @@ import {restoreHistory} from './backup-history.js';
 import {sourceKey,sourcesFor,validateSummary,SUMMARY_MODEL} from './summaries.js';
 
 // Every conversation field a backup carries; anything missing from a newer copy is removed locally too.
-export const SYNC_FIELDS=['title','category','tags','collectionManual','secondaryCategories','collectionReason','created','duration','transcript','chunks','chats','removedAnswers','generatedSummary','highlights','speakerLabels','comments','bookmarks','audioType','transcriptVersions','speechGaps','moments','transcriptVersionId','transcriptEngine','transcriptEngineLabel','transcribed','mic'];
+export const SYNC_FIELDS=['title','category','tags','collectionManual','secondaryCategories','collectionReason','created','duration','transcript','chunks','chats','removedAnswers','generatedSummary','highlights','speakerLabels','comments','bookmarks','audioType','transcriptVersions','speechGaps','moments','titleAuto','transcriptVersionId','transcriptEngine','transcriptEngineLabel','transcribed','mic'];
 
 const IGNORED='recordit.syncIgnored';
 export function ignoredTargets(storage=globalThis.localStorage){try{const list=JSON.parse(storage?.getItem(IGNORED)||'[]');return new Set(Array.isArray(list)?list.filter(t=>typeof t==='string'):[]);}catch{return new Set();}}

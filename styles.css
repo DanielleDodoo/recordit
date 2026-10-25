@@ -97,3 +97,15 @@ header{height:64px}h1,.page-heading h1{font-size:40px;letter-spacing:-1.3px}.pag
 #send-laptop{margin-right:4px}
 /* Quick guide: short steps, easy to scan. */
 .help h3{font-size:16px;margin:18px 0 6px}.help ol,.help ul{margin:0;padding-left:22px}.help li{font-size:15px;line-height:1.6;margin:3px 0}
+/* The recording view fills the screen: timer, live words, Highlight and Note, Pause and Finish. Nothing to fill in. */
+#record-dialog.record-screen{box-sizing:border-box;width:100%;max-width:100%;height:100%;max-height:100%;margin:0;overflow:auto;padding:20px 16px calc(20px + env(safe-area-inset-bottom));border:0;border-radius:0;background:var(--paper)}
+#record-dialog.record-screen[open]{display:flex;flex-direction:column;align-items:center}
+#record-dialog.record-screen>*{width:100%;max-width:640px}
+#record-dialog.record-screen::backdrop{background:var(--paper)}
+.record-top{display:flex;justify-content:space-between;align-items:center;min-height:36px}
+#record-dialog.record-screen #timer{font-size:64px;margin:18px 0 4px}
+#record-dialog.record-screen .live-words{flex:1;max-height:none;min-height:120px}
+#record-dialog.record-screen .record-actions{margin-top:14px}
+#record-dialog.record-screen .record-actions button{font-size:17px;padding:14px 22px;border-radius:12px}
+/* The main action among the small conversation buttons (Send to laptop on the phone) keeps its colour. */
+.detail-actions button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-size:14px;padding:9px 14px}

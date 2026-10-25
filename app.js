@@ -36,6 +36,7 @@ import {checkAudioSize} from './limits.js';
 import {isNative,noLaptop,onPhoneWeb,startNative,stopNative,pauseNative} from './mobile.js';
 import {addMoment,applyMoments,restoreMoments} from './moments.js';
 import {startLiveWords} from './live-words.js';
+import {placeholderTitle,titleFromSummary} from './auto-title.js';
 const nativeAiUnavailable='Summaries and AI answers are made by recordit on your laptop. Find words and saved answers work here.';
 function requireGeneration(){if(noLaptop)throw Error(nativeAiUnavailable);}
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -113,6 +114,8 @@ async function openNote(id){
  $('player').hidden=!audio?.blob;$('export-audio').disabled=!audio?.blob;$('transcribe').disabled=!audio?.blob||busy;
  if(audio?.blob){playerURL=URL.createObjectURL(audio.blob);$('player').src=playerURL;}else $('player').removeAttribute('src');
  window.scrollTo(0,0);
+ // A recording from the phone arrives already transcribed: its summary, and so its title, is made on first opening.
+ if(!noLaptop&&!busy&&selected.titleAuto&&selected.transcript?.trim()&&!selected.generatedSummary)summarise(selected).catch(()=>{});
 }
 function showSync(){if(!selected)return;showTranscriptSave();$('sync-status').textContent=selected.backedRevision===selected.revision&&selected.backedFolder===activeBackupFolder&&(selected.backedTargetId||selected.id)===(selected.backupId||selected.id)?'Copied to Drive folder':libraryStorage.getItem('backupEnabled')==='true'?'Local copy · backup pending':'Saved on this device';}
 function showFiling(){if(!selected)return;$('category').value=selected.category;const reason=(selected.collectionReason||'Add a transcript or tags for automatic topic matching.').replace(selected.collectionManual?'Several collections match equally. Choose a primary collection. ':'\u0000','');$('filing-reason').textContent=(selected.collectionManual?'Primary chosen by you. ':'')+reason;$('secondary-collections').textContent='Also appears in: '+((selected.secondaryCategories||[]).join(' · ')||'no secondary collections yet');}
@@ -217,8 +220,10 @@ async function summarise(note=selected){
  job('Preparing the offline summary. The first run loads a large local model.');
  try{
   const result=await inference('summarise',{sources:sourcesFor(note)});
-  const saved=await db.saveSummary(note.id,transcript,chunks,{...result,sourceKey:key,model:result.model||SUMMARY_MODEL,created:Date.now()});
-  await refresh();if(saved&&selected?.id===note.id){selected=saved;renderSummary();showSync();job('Summary saved. Select a numbered reference to check its transcript evidence.');}else if(!saved)job('The transcript changed while summarising. Generate again to use the latest text.');scheduleSync();
+  let saved=await db.saveSummary(note.id,transcript,chunks,{...result,sourceKey:key,model:result.model||SUMMARY_MODEL,created:Date.now()});
+  const named=saved?.titleAuto&&titleFromSummary(result);
+  if(named)saved=await db.editAnswers(note.id,n=>{if(!n.titleAuto||n.title===named)return false;n.title=named;})||saved;
+  await refresh();if(saved&&selected?.id===note.id){selected=saved;if(document.activeElement!==$('title'))$('title').value=saved.title;renderSummary();showSync();job('Summary saved. Select a numbered reference to check its transcript evidence.');}else if(!saved)job('The transcript changed while summarising. Generate again to use the latest text.');scheduleSync();
  }catch(e){job(e.message);throw e;}
 }
 function renderChat(){
@@ -388,7 +393,7 @@ async function saveToRonnie(blob,title,extension){
  if(!response.ok)throw Error('Could not save to the Ronnie folder: '+await response.text()+'. Your recording is still saved in the app.');
  const result=await response.json();toast('Saved: '+result.path);
 }
-function exportData(n){return {version:1,title:n.title,category:n.category,secondaryCategories:n.secondaryCategories||[],tags:n.tags||[],collectionManual:n.collectionManual||false,collectionReason:n.collectionReason||null,created:n.created,duration:n.duration,transcript:n.transcript,chunks:n.chunks||[],generatedSummary:n.generatedSummary||null,chats:n.chats||[],removedAnswers:n.removedAnswers||[],bookmarks:n.bookmarks||[],comments:n.comments||[],speakerLabels:n.speakerLabels||[],highlights:n.highlights||[],audioFile:n.id+'.audio',audioType:n.audioType||null,...Object.fromEntries(['transcriptVersions','speechGaps','moments','transcriptVersionId','transcriptEngine','transcriptEngineLabel','transcribed','mic'].filter(key=>n[key]!==undefined&&n[key]!==null).map(key=>[key,n[key]]))};}
+function exportData(n){return {version:1,title:n.title,category:n.category,secondaryCategories:n.secondaryCategories||[],tags:n.tags||[],collectionManual:n.collectionManual||false,collectionReason:n.collectionReason||null,created:n.created,duration:n.duration,transcript:n.transcript,chunks:n.chunks||[],generatedSummary:n.generatedSummary||null,chats:n.chats||[],removedAnswers:n.removedAnswers||[],bookmarks:n.bookmarks||[],comments:n.comments||[],speakerLabels:n.speakerLabels||[],highlights:n.highlights||[],audioFile:n.id+'.audio',audioType:n.audioType||null,...Object.fromEntries(['transcriptVersions','speechGaps','moments','titleAuto','transcriptVersionId','transcriptEngine','transcriptEngineLabel','transcribed','mic'].filter(key=>n[key]!==undefined&&n[key]!==null).map(key=>[key,n[key]]))};}
 async function importFile(file){
  if(!file)return;let n={id:crypto.randomUUID(),title:file.name.replace(/\.[^.]+$/,''),category:'Personal',created:Date.now(),duration:0,transcript:'',chunks:[],chats:[],revision:1};
  if(/\.json$/i.test(file.name)){const backup=JSON.parse(await file.text());Object.assign(n,validateBackup(backup));Object.assign(n,restoreHistory(backup,n));if(backup.generatedSummary?.sourceKey===sourceKey(n)){try{n.generatedSummary={...validateSummary(backup.generatedSummary,sourcesFor(n)),sourceKey:sourceKey(n),parts:Number(backup.generatedSummary.parts)||1,created:Number(backup.generatedSummary.created)||Date.now(),model:SUMMARY_MODEL};}catch{}}}
@@ -401,7 +406,12 @@ async function importFile(file){
 $('mic-mode').innerHTML=Object.entries(MIC_MODES).map(([value,mode])=>`<option value="${value}">${esc(mode.label)}</option>`).join('');
 try{$('mic-mode').value=micMode(localStorage.micMode);}catch{}
 $('mic-mode').onchange=()=>{try{localStorage.micMode=$('mic-mode').value;}catch{}};$('record-source').onchange=()=>{$('mic-mode-label').hidden=$('mic-help').hidden=$('record-source').value!=='microphone';};
-function openRecorder(){if(busy){toast('Please wait for the AI task to finish before starting a recording.');return;}$('record-category').value='Unfiled';$('record-dialog').showModal();}
+function openRecorder(source='microphone'){
+ if(recording)return $('record-dialog').showModal();
+ if(busy){toast('Please wait for the AI task to finish before starting a recording.');return;}
+ $('record-category').value='Unfiled';$('record-title').value='';$('record-source').value=source;
+ $('record-dialog').showModal();beginRecording();
+}
 async function startRecording(){
  if(recording)throw Error('A recording is already active.');
  if(isNative)return startPhoneRecording();
@@ -416,7 +426,7 @@ async function startRecording(){
    screenStream.getVideoTracks().forEach(track=>track.onended=()=>{if(recorder&&recorder.state!=='inactive')recorder.stop();});
   }else{$('record-status').textContent='Asking to use the microphone…';stream=await navigator.mediaDevices.getUserMedia(micConstraints($('mic-mode').value));mic=micSummary($('mic-mode').value,stream.getAudioTracks()[0]?.getSettings?.()||{});}
   if(typeof MediaRecorder==='undefined')throw Error('This browser cannot record audio. Update your phone, or open recordit in Safari.');const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));try{recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});}catch{recorder=new MediaRecorder(stream);}
-  recording={id:crypto.randomUUID(),title:$('record-title').value.trim()||'Conversation · '+date(Date.now()),category:$('record-category').value,collectionManual:$('record-category').value!=='Unfiled',created:Date.now(),duration:0,transcript:'',chunks:[],chats:[],revision:1,recording:true,audioType:recorder.mimeType,...(mic?{mic}:{})};
+  recording={id:crypto.randomUUID(),title:$('record-title').value.trim()||placeholderTitle(Date.now()),titleAuto:!$('record-title').value.trim(),category:$('record-category').value,collectionManual:$('record-category').value!=='Unfiled',created:Date.now(),duration:0,transcript:'',chunks:[],chats:[],revision:1,recording:true,audioType:recorder.mimeType,...(mic?{mic}:{})};
   await db.save(recording);let parts=[];elapsed=0;lastTick=Date.now();const note=recording;
   // Each few seconds only the new piece is added to the library's copy; if that copy is ever out of step,
   // the whole recording so far is saved instead, so nothing recorded is ever missing from it.
@@ -435,7 +445,7 @@ async function startRecording(){
 }
 async function startPhoneRecording(){
  $('record-start').disabled=true;$('record-close').disabled=true;
- const note={id:crypto.randomUUID(),title:$('record-title').value.trim()||'Conversation · '+date(Date.now()),category:$('record-category').value,collectionManual:$('record-category').value!=='Unfiled',created:Date.now(),duration:0,transcript:'',chunks:[],chats:[],revision:1,recording:true,audioType:'audio/mp4'};
+ const note={id:crypto.randomUUID(),title:$('record-title').value.trim()||placeholderTitle(Date.now()),titleAuto:!$('record-title').value.trim(),category:$('record-category').value,collectionManual:$('record-category').value!=='Unfiled',created:Date.now(),duration:0,transcript:'',chunks:[],chats:[],revision:1,recording:true,audioType:'audio/mp4'};
  try{
   await db.save(note);await startNative(note.id);recording=note;elapsed=0;lastTick=Date.now();
   recorder={state:'recording',pause:()=>run(async()=>{await pauseNative(true);recorder.state='paused';})(),resume:()=>run(async()=>{await pauseNative(false);lastTick=Date.now();recorder.state='recording';})(),stop:()=>run(async()=>{
@@ -456,12 +466,15 @@ function addLiveLine(text,className){const line=document.createElement('p');line
 function endLiveWords(message){if(!liveWords)return;liveWords.stop();liveWords=null;if(message)addLiveLine(message,'live-note');}
 function beginMoments(note,{live=true}={}){
  note.moments=restoreMoments(note.moments);lastAudioAt=0;$('moment-actions').hidden=false;$('live-words').replaceChildren();$('live-words-option').hidden=true;showMomentCount(note);
- if(!live||!liveWordsSupported||!$('live-words-on').checked)return;
- $('live-words').hidden=false;let interim=null;
+ if(!live||!$('live-words-on').checked)return;
+ $('live-words').hidden=false;
+ const unavailable=()=>{liveWords=null;if(!$('live-words').querySelector('p:not(.live-note)'))addLiveLine('Live words aren’t available in this browser. Your full transcript comes after you finish.','live-note');};
+ if(!liveWordsSupported)return unavailable();
+ let interim=null;
  liveWords=startLiveWords({
   onLine:text=>{interim?.remove();interim=null;addLiveLine(text);},
   onInterim:text=>{if(!text){interim?.remove();interim=null;return;}if(!interim){interim=document.createElement('p');interim.className='interim';$('live-words').append(interim);}interim.textContent=text;$('live-words').scrollTop=$('live-words').scrollHeight;},
-  onUnavailable:()=>{liveWords=null;$('live-words').hidden=!$('live-words').children.length;}});
+  onUnavailable:unavailable});
  // If the recording stops receiving audio while live words run, live words stop and the recording carries on.
  momentWatch=setInterval(()=>{if(liveWords&&lastAudioAt&&recorder?.state==='recording'&&Date.now()-lastAudioAt>15000)endLiveWords('Live words were switched off to keep your recording safe.');},3000);
 }
@@ -483,7 +496,7 @@ async function sendToLaptop(){
  const note=selected,audio=note&&await db.getAudio(note.id);if(!audio?.blob)throw Error('This conversation has no audio to send.');
  const base=(note.title||'Recording').replace(/[\\/:*?"<>|]+/g,'-').trim().slice(0,100)||'Recording';
  const type=audio.blob.type||note.audioType||'audio/mp4',ext=/mp4|m4a|aac/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';
- const marks={app:'recordit',version:1,title:note.title,created:note.created,duration:note.duration,moments:restoreMoments(note.moments)};
+ const marks={app:'recordit',version:1,title:note.title,titleAuto:note.titleAuto===true,created:note.created,duration:note.duration,moments:restoreMoments(note.moments)};
  const files=[new File([audio.blob],`${base}.${ext}`,{type}),new File([JSON.stringify(marks)],`${base}.marks.json`,{type:'application/json'})];
  if(navigator.canShare?.({files})){
   try{await navigator.share({files,title:note.title});}catch(error){if(error.name==='AbortError')return;throw error;}
@@ -491,7 +504,7 @@ async function sendToLaptop(){
  }else{for(const file of files)download(file,file.name);toast('Saved. Put both files in the recordit inbox folder in Google Drive.');}
 }
 $('send-laptop').hidden=!onPhoneWeb;$('send-laptop').onclick=run(sendToLaptop);
-function resetRecorder(){$('mic-mode').disabled=false;$('record-start').hidden=false;$('record-stop').hidden=true;$('record-stop').disabled=false;$('record-pause').hidden=true;$('record-close').disabled=false;$('record-title').disabled=false;$('record-category').disabled=false;$('record-source').disabled=false;$('record-heading').textContent='Ready when you are.';$('record-status').textContent='Make sure everyone is happy to be recorded.';$('record-title').value='';$('timer').textContent='00:00';$('record-pause').textContent='Pause';}
+function resetRecorder(){$('mic-mode').disabled=false;$('record-start').hidden=true;$('record-close').hidden=true;$('record-stop').hidden=true;$('record-stop').disabled=false;$('record-pause').hidden=true;$('record-close').disabled=false;$('record-title').disabled=false;$('record-category').disabled=false;$('record-source').disabled=false;$('record-heading').textContent='Recording';$('record-status').textContent='';$('record-title').value='';$('timer').textContent='00:00';$('record-pause').textContent='Pause';}
 async function prepare(){
  if(onPhoneWeb){$('model-status').textContent='On this phone, transcripts are made by your laptop: open a recording and choose Send to laptop.';return;}
  if(isNative){localStorage.modelsReady='true';$('model-status').textContent=nativeAiUnavailable+' Speech assets are bundled; physical-device transcription is not yet verified.';return;}
@@ -545,12 +558,16 @@ async function settings(){
  const estimate=await navigator.storage?.estimate?.();$('storage-status').textContent=estimate?`${Math.round(estimate.usage/1e6)} MB used · ${Math.round(estimate.quota/1e6)} MB available quota`:'Storage estimate unavailable.';
  if(noLaptop){$('drive-status').textContent='Direct phone Drive backup is not activated. Recordings stay on this device.';}else try{const status=await(await fetch('/api/status',{cache:'no-store'})).json();setBackupDestination(status.backupFolder);$('drive-status').textContent=status.available?'Laptop Drive bridge is available. Backups contain audio and a readable JSON transcript.':'Google Drive is not accessible on the laptop yet.';}catch{$('drive-status').textContent='Laptop bridge unavailable. Recordings remain on this device.';}
 }
-$('new').onclick=openRecorder;$('record-hero').onclick=openRecorder;$('record-close').onclick=()=>{if(!recording&&!$('record-start').disabled)$('record-dialog').close();};$('record-dialog').addEventListener('cancel',e=>{if(recording||$('record-start').disabled)e.preventDefault();});
-$('record-start').onclick=async()=>{try{await startRecording();}catch(e){console.error(e);const why=e?.name==='NotAllowedError'?'recordit isn’t allowed to use the microphone. On iPhone: Settings → Apps → Safari → Microphone → Allow, then try again.':e?.name==='NotFoundError'?'No microphone was found.':(e?.message||'Something went wrong.');$('record-status').textContent='Recording didn’t start. '+why;toast('Recording didn’t start. '+why);}};$('record-stop').onclick=()=>{if(!recorder)return;$('record-stop').disabled=true;recorder.stop();};$('record-pause').onclick=()=>{if(recorder.state==='recording'){recorder.pause();$('record-pause').textContent='Resume';$('record-status').textContent='Paused · your audio is safe';}else{recorder.resume();lastTick=Date.now();$('record-pause').textContent='Pause';$('record-status').textContent='Recording · audio saved locally every few seconds';}};
+$('new').onclick=()=>openRecorder();$('record-hero').onclick=()=>openRecorder();$('new-tab').onclick=()=>openRecorder('computer');$('new-tab').hidden=noLaptop||!navigator.mediaDevices?.getDisplayMedia;$('record-close').onclick=()=>{if(!recording)$('record-dialog').close();};$('record-dialog').addEventListener('cancel',e=>{if(recording||$('record-start').disabled)e.preventDefault();});
+async function beginRecording(){
+ $('record-start').hidden=$('record-close').hidden=true;$('record-status').textContent=$('record-source').value==='computer'?'Choose the tab with the video, and tick Share tab audio.':'Starting…';
+ try{await startRecording();}catch(e){$('record-start').hidden=$('record-close').hidden=false;console.error(e);const why=e?.name==='NotAllowedError'?'recordit isn’t allowed to use the microphone. On iPhone: Settings → Apps → Safari → Microphone → Allow, then try again.':e?.name==='NotFoundError'?'No microphone was found.':(e?.message||'Something went wrong.');$('record-status').textContent='Recording didn’t start. '+why;}
+}
+$('record-start').onclick=beginRecording;$('record-stop').onclick=()=>{if(!recorder)return;$('record-stop').disabled=true;recorder.stop();};$('record-pause').onclick=()=>{if(recorder.state==='recording'){recorder.pause();$('record-pause').textContent='Resume';$('record-status').textContent='Paused · your audio is safe';}else{recorder.resume();lastTick=Date.now();$('record-pause').textContent='Pause';$('record-status').textContent='Recording · audio saved locally every few seconds';}};
 $('back').onclick=()=>{$('detail').hidden=true;$('library').hidden=false;$('player').pause();questionDrafts.select(null);selected=null;refresh();};
 function bindFilters(){document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;$('breadcrumb').textContent=filter==='All'?'All conversations':filter;$('detail').hidden=true;$('library').hidden=false;$('player').pause();questionDrafts.select(null);selected=null;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderList();});}
 $('library-sort').onchange=renderList;$('library-search-field').onchange=renderList;$('library-search-collection').onchange=renderList;$('search').oninput=renderList;$('import').onclick=()=>$('file').click();$('file').onchange=run(async e=>{try{await importFile(e.target.files[0]);}finally{e.target.value='';}});
-$('title').oninput=run(async()=>{selected.title=$('title').value.trim()||'Untitled conversation';await commit();});$('category').onchange=run(async()=>{selected.category=$('category').value;selected.collectionManual=true;$('auto-file').checked=false;await commit();});
+$('title').oninput=run(async()=>{selected.title=$('title').value.trim()||'Untitled conversation';selected.titleAuto=false;await commit();});$('category').onchange=run(async()=>{selected.category=$('category').value;selected.collectionManual=true;$('auto-file').checked=false;await commit();});
 $('tags').oninput=run(async()=>{selected.tags=$('tags').value.split(',').map(t=>t.trim()).filter(Boolean).slice(0,30);await commit();});$('auto-file').onchange=run(async()=>{selected.collectionManual=!$('auto-file').checked;await commit();});
 $('correction-cancel').onclick=()=>{if($('correction-form').dataset.saving!=='true')$('correction-dialog').close();};
 $('correction-dialog').oncancel=e=>{if($('correction-form').dataset.saving==='true')e.preventDefault();};
