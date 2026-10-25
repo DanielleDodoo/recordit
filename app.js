@@ -34,7 +34,8 @@ import {updateCollectionRules,recoverCollectionUpdate,COLLECTION_PENDING} from '
 import {GROUPS,sourcesFor,sourceKey,SUMMARY_MODEL,validateSummary} from './summaries.js';
 import {checkAudioSize} from './limits.js';
 import {isNative,noLaptop,onPhoneWeb,startNative,stopNative,pauseNative} from './mobile.js';
-import {addMoment,applyMoments,restoreMoments} from './moments.js';
+import {addMoment,applyMoments,restoreMoments,removeMoment} from './moments.js';
+import {keepAwake} from './keep-awake.js';
 import {startLiveWords} from './live-words.js';
 import {placeholderTitle,titleFromSummary} from './auto-title.js';
 const nativeAiUnavailable='Summaries and AI answers are made by recordit on your laptop. Find words and saved answers work here.';
@@ -433,10 +434,10 @@ async function startRecording(){
   let stored=0;
   recorder.ondataavailable=e=>{lastAudioAt=Date.now();if(e.data.size){const part=e.data;parts.push(part);const blob=new Blob(parts,{type:recorder.mimeType});saving=saving.then(async()=>{if(await db.appendAudio(note.id,part,stored,recorder.mimeType))stored+=part.size;else{await db.saveAudio(note.id,blob);stored=blob.size;}note.duration=elapsed;await db.save(note);}).catch(error=>{toast('Storage error: finish and export your audio now. '+error.message);download(blob,note.id+'.'+(blob.type.includes('mp4')?'m4a':'webm'));});}};
   recorder.onerror=()=>toast('The microphone reported an error. Finish and save the available audio.');
-  recorder.onstop=()=>run(async()=>{endMoments();await saving;note.recording=false;note.duration=elapsed;await commit(note);stream.getTracks().forEach(t=>t.stop());screenStream?.getTracks().forEach(t=>t.stop());screenStream=null;await wakeLock?.release();wakeLock=null;clearInterval(timerInterval);recording=null;recorder=null;$('record-dialog').close();resetRecorder();await openNote(note.id);toast(onPhoneWeb?'Recording saved on this phone. Choose Send to laptop when you’re ready for the transcript.':'Recording saved on this device.');if(localStorage.modelsReady==='true'||await speechEngine())await transcribe();})();
-  recorder.start(5000);try{wakeLock=await navigator.wakeLock?.request('screen');}catch{}
+  recorder.onstop=()=>run(async()=>{endMoments();await saving;note.recording=false;note.duration=elapsed;await commit(note);stream.getTracks().forEach(t=>t.stop());screenStream?.getTracks().forEach(t=>t.stop());screenStream=null;await wakeLock?.stop();wakeLock=null;clearInterval(timerInterval);recording=null;recorder=null;$('record-dialog').close();resetRecorder();await openNote(note.id);toast(onPhoneWeb?'Recording saved on this phone. Choose Send to laptop when you’re ready for the transcript.':'Recording saved on this device.');if(localStorage.modelsReady==='true'||await speechEngine())await transcribe();})();
+  recorder.start(5000);wakeLock=keepAwake({onChange:showAwake});
   // If the microphone is taken away while live words are running, live words stop so the recording can carry on.
-  stream.getAudioTracks()[0]?.addEventListener('mute',()=>endLiveWords('Live words were switched off to keep your recording safe.'));
+  stream.getAudioTracks()[0]?.addEventListener('mute',()=>{if(document.visibilityState==='visible')endLiveWords('Live words were switched off to keep your recording safe.');});
   // Highlight, Note and live words are extras: a problem with them must never stop the recording.
   try{beginMoments(note,{live:$('record-source').value==='microphone'});}catch(error){console.error(error);}
   timerInterval=setInterval(()=>{const now=Date.now();if(recorder?.state==='recording')elapsed+=(now-lastTick)/1000;lastTick=now;$('timer').textContent=clock(elapsed);},250);
@@ -460,30 +461,56 @@ async function startPhoneRecording(){
 // Highlight and Note while recording, kept by their time in the audio (moments.js), and live words where the
 // device can provide them. Live words are only a preview: the recording always comes first.
 const liveWordsSupported=!isNative&&!!(globalThis.SpeechRecognition||globalThis.webkitSpeechRecognition);
-let liveWords=null,lastAudioAt=0,momentWatch=null,noteMomentAt=0;
+let liveWords=null,liveWanted=false,lastAudioAt=0,momentWatch=null,noteMomentAt=0;
 function showMomentCount(note){const marked=restoreMoments(note.moments),h=marked.filter(m=>m.kind==='highlight').length,n=marked.length-h;$('moment-count').hidden=!marked.length;$('moment-count').textContent=[h&&`${h} highlight${h>1?'s':''}`,n&&`${n} note${n>1?'s':''}`].filter(Boolean).join(' · ')+' marked';}
-function addLiveLine(text,className){const line=document.createElement('p');line.textContent=text;if(className)line.className=className;$('live-words').append(line);while($('live-words').children.length>40)$('live-words').firstChild.remove();$('live-words').scrollTop=$('live-words').scrollHeight;}
-function endLiveWords(message){if(!liveWords)return;liveWords.stop();liveWords=null;if(message)addLiveLine(message,'live-note');}
+function addLiveLine(text,className,t){const line=document.createElement('p');line.textContent=text;if(className)line.className=className;if(Number.isFinite(t)){line.dataset.t=t;line.tabIndex=0;line.setAttribute('role','button');line.setAttribute('aria-pressed','false');}$('live-words').append(line);while($('live-words').children.length>40)$('live-words').firstChild.remove();$('live-words').scrollTop=$('live-words').scrollHeight;}
+function endLiveWords(message){liveWanted=false;if(!liveWords)return;liveWords.stop();liveWords=null;if(message)addLiveLine(message,'live-note');}
+function pauseLive(){if(!liveWords)return;liveWords.stop();liveWords=null;addLiveLine('Paused','live-note');}
+function resumeLive(){if(liveWanted&&!liveWords&&recording&&recorder?.state==='recording')startLive();}
 function beginMoments(note,{live=true}={}){
  note.moments=restoreMoments(note.moments);lastAudioAt=0;$('moment-actions').hidden=false;$('live-words').replaceChildren();$('live-words-option').hidden=true;showMomentCount(note);
  if(!live||!$('live-words-on').checked)return;
- $('live-words').hidden=false;
- const unavailable=()=>{liveWords=null;if(!$('live-words').querySelector('p:not(.live-note)'))addLiveLine('Live words aren’t available in this browser. Your full transcript comes after you finish.','live-note');};
- if(!liveWordsSupported)return unavailable();
- let interim=null;
- liveWords=startLiveWords({
-  onLine:text=>{interim?.remove();interim=null;addLiveLine(text);},
-  onInterim:text=>{if(!text){interim?.remove();interim=null;return;}if(!interim){interim=document.createElement('p');interim.className='interim';$('live-words').append(interim);}interim.textContent=text;$('live-words').scrollTop=$('live-words').scrollHeight;},
-  onUnavailable:unavailable});
+ $('live-words').hidden=false;liveWanted=true;
+ if(liveWordsSupported)addLiveLine('Tap any line to highlight it.','live-note');
+ startLive();
  // If the recording stops receiving audio while live words run, live words stop and the recording carries on.
- momentWatch=setInterval(()=>{if(liveWords&&lastAudioAt&&recorder?.state==='recording'&&Date.now()-lastAudioAt>15000)endLiveWords('Live words were switched off to keep your recording safe.');},3000);
+ momentWatch=setInterval(()=>{if(liveWords&&lastAudioAt&&recorder?.state==='recording'&&document.visibilityState==='visible'&&Date.now()-lastAudioAt>15000)endLiveWords('Live words were switched off to keep your recording safe.');},3000);
 }
-function endMoments(){endLiveWords();clearInterval(momentWatch);momentWatch=null;$('moment-actions').hidden=true;$('moment-note-form').hidden=true;$('moment-count').hidden=true;$('live-words').hidden=true;$('live-words-option').hidden=!liveWordsSupported;}
-function markMoment(kind,text='',t=elapsed){
+function startLive(){
+ const unavailable=()=>{liveWords=null;liveWanted=false;if(!$('live-words').querySelector('p:not(.live-note)'))addLiveLine('Live words aren’t available in this browser. Your full transcript comes after you finish.','live-note');};
+ if(!liveWordsSupported)return unavailable();
+ // A line is placed at the moment its first words appeared, so a tap marks the passage it was said in.
+ let interim=null,said=null;
+ liveWords=startLiveWords({
+  onLine:text=>{interim?.remove();interim=null;addLiveLine(text,'',said??Math.max(0,elapsed-2));said=null;},
+  onInterim:text=>{if(!text){interim?.remove();interim=null;return;}said??=elapsed;if(!interim){interim=document.createElement('p');interim.className='interim';$('live-words').append(interim);}interim.textContent=text;$('live-words').scrollTop=$('live-words').scrollHeight;},
+  onUnavailable:unavailable});
+}
+function endMoments(){endLiveWords();liveWanted=false;clearInterval(momentWatch);momentWatch=null;$('moment-actions').hidden=true;$('moment-note-form').hidden=true;$('moment-count').hidden=true;$('live-words').hidden=true;$('live-words-option').hidden=!liveWordsSupported;}
+function markMoment(kind,text='',t=elapsed,line=null){
+ const note=recording;if(!note)return;const id=crypto.randomUUID();
+ note.moments=addMoment(note.moments,{t,kind,text,id});saving=saving.then(()=>db.save(note)).catch(()=>{});showMomentCount(note);
+ if(kind!=='highlight')return;
+ line??=[...$('live-words').querySelectorAll('p[data-t]:not(.marked)')].at(-1);
+ if(line){line.classList.add('marked');line.dataset.moment=id;line.setAttribute('aria-pressed','true');}
+}
+function toggleLineHighlight(line){
  const note=recording;if(!note)return;
- note.moments=addMoment(note.moments,{t,kind,text});saving=saving.then(()=>db.save(note)).catch(()=>{});showMomentCount(note);
- if(kind==='highlight')[...$('live-words').querySelectorAll('p:not(.interim):not(.live-note)')].at(-1)?.classList.add('marked');
+ if(line.dataset.moment){note.moments=removeMoment(note.moments,line.dataset.moment);delete line.dataset.moment;line.classList.remove('marked');line.setAttribute('aria-pressed','false');saving=saving.then(()=>db.save(note)).catch(()=>{});showMomentCount(note);}
+ else markMoment('highlight',line.textContent,Number(line.dataset.t),line);
 }
+$('live-words').onclick=event=>{const line=event.target.closest('p[data-t]');if(line)toggleLineHighlight(line);};
+$('live-words').onkeydown=event=>{const line=event.target.closest('p[data-t]');if(line&&(event.key==='Enter'||event.key===' ')){event.preventDefault();toggleLineHighlight(line);}};
+// The screen staying on, said plainly; and if recordit was left or the phone locked anyway, how long for.
+function showAwake(how){$('awake-note').hidden=how!=='none';$('awake-note').textContent='Keep your screen on until you finish: this phone may lock it, and recordit can’t hear while it’s locked.';}
+let hiddenAt=0;
+document.addEventListener('visibilitychange',()=>{
+ if(!recording||isNative)return;
+ if(document.visibilityState==='hidden'){hiddenAt=Date.now();return;}
+ const away=hiddenAt?(Date.now()-hiddenAt)/1000:0;hiddenAt=0;lastAudioAt=Date.now();
+ if(away>=3){$('away-note').hidden=false;$('away-note').textContent='recordit was in the background for '+clock(away)+'. The phone may not have let it hear during that time.';}
+ resumeLive();
+});
 $('live-words-option').hidden=!liveWordsSupported;try{$('live-words-on').checked=localStorage.liveWords!=='off';}catch{}
 $('live-words-on').onchange=()=>{try{localStorage.liveWords=$('live-words-on').checked?'on':'off';}catch{}};
 $('mark-highlight').onclick=()=>markMoment('highlight');
@@ -504,7 +531,7 @@ async function sendToLaptop(){
  }else{for(const file of files)download(file,file.name);toast('Saved. Put both files in the recordit inbox folder in Google Drive.');}
 }
 $('send-laptop').hidden=!onPhoneWeb;$('send-laptop').onclick=run(sendToLaptop);
-function resetRecorder(){$('mic-mode').disabled=false;$('record-start').hidden=true;$('record-close').hidden=true;$('record-stop').hidden=true;$('record-stop').disabled=false;$('record-pause').hidden=true;$('record-close').disabled=false;$('record-title').disabled=false;$('record-category').disabled=false;$('record-source').disabled=false;$('record-heading').textContent='Recording';$('record-status').textContent='';$('record-title').value='';$('timer').textContent='00:00';$('record-pause').textContent='Pause';}
+function resetRecorder(){$('mic-mode').disabled=false;$('record-start').hidden=true;$('record-close').hidden=true;$('record-stop').hidden=true;$('record-stop').disabled=false;$('record-pause').hidden=true;$('record-close').disabled=false;$('record-title').disabled=false;$('record-category').disabled=false;$('record-source').disabled=false;$('record-heading').textContent='Recording';$('record-status').textContent='';$('record-title').value='';$('timer').textContent='00:00';$('record-pause').textContent='Pause';$('awake-note').hidden=$('away-note').hidden=true;}
 async function prepare(){
  if(onPhoneWeb){$('model-status').textContent='On this phone, transcripts are made by your laptop: open a recording and choose Send to laptop.';return;}
  if(isNative){localStorage.modelsReady='true';$('model-status').textContent=nativeAiUnavailable+' Speech assets are bundled; physical-device transcription is not yet verified.';return;}
@@ -569,7 +596,7 @@ async function beginRecording(){
  $('record-start').hidden=$('record-close').hidden=true;$('record-status').textContent=$('record-source').value==='computer'?'Choose the tab with the video, and tick Share tab audio.':'Starting…';
  try{await startRecording();}catch(e){$('record-start').hidden=$('record-close').hidden=false;console.error(e);const why=e?.name==='NotAllowedError'?micBlockedHelp(navigator.userAgent):e?.name==='NotFoundError'?'No microphone was found.':(e?.message||'Something went wrong.');$('record-status').textContent='Recording didn’t start. '+why;}
 }
-$('record-start').onclick=beginRecording;$('record-stop').onclick=()=>{if(!recorder)return;$('record-stop').disabled=true;recorder.stop();};$('record-pause').onclick=()=>{if(recorder.state==='recording'){recorder.pause();$('record-pause').textContent='Resume';$('record-status').textContent='Paused · your audio is safe';}else{recorder.resume();lastTick=Date.now();$('record-pause').textContent='Pause';$('record-status').textContent='Recording · audio saved locally every few seconds';}};
+$('record-start').onclick=beginRecording;$('record-stop').onclick=()=>{if(!recorder)return;$('record-stop').disabled=true;recorder.stop();};$('record-pause').onclick=()=>{if(recorder.state==='recording'){recorder.pause();pauseLive();$('record-pause').textContent='Resume';$('record-status').textContent='Paused · nothing is being recorded';}else{recorder.resume();lastTick=lastAudioAt=Date.now();$('record-pause').textContent='Pause';$('record-status').textContent='Recording · audio saved every few seconds';resumeLive();}};
 $('back').onclick=()=>{$('detail').hidden=true;$('library').hidden=false;$('player').pause();questionDrafts.select(null);selected=null;refresh();};
 function bindFilters(){document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;$('breadcrumb').textContent=filter==='All'?'All conversations':filter;$('detail').hidden=true;$('library').hidden=false;$('player').pause();questionDrafts.select(null);selected=null;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderList();});}
 $('library-sort').onchange=renderList;$('library-search-field').onchange=renderList;$('library-search-collection').onchange=renderList;$('search').oninput=renderList;$('import').onclick=()=>$('file').click();$('file').onchange=run(async e=>{try{await importFile(e.target.files[0]);}finally{e.target.value='';}});

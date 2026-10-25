@@ -52,3 +52,5 @@ export function applyMoments(note,{newId=()=>globalThis.crypto.randomUUID()}={})
  note.moments=moments;note.bookmarks=bookmarks;note.comments=comments;
  return placed;
 }
+
+export const removeMoment=(list,id)=>restoreMoments(list).filter(m=>m.id!==id);

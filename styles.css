@@ -109,3 +109,10 @@ header{height:64px}h1,.page-heading h1{font-size:40px;letter-spacing:-1.3px}.pag
 #record-dialog.record-screen .record-actions button{font-size:17px;padding:14px 22px;border-radius:12px}
 /* The main action among the small conversation buttons (Send to laptop on the phone) keeps its colour. */
 .detail-actions button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-size:14px;padding:9px 14px}
+
+/* Live lines can be tapped to highlight them. Warnings on the recording view stay until the recording ends. */
+.live-words p[data-t]{cursor:pointer;border-radius:4px;-webkit-tap-highlight-color:transparent}
+.live-words p[data-t]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.record-warning{margin:6px 0 0;padding:10px 12px;border-radius:10px;background:var(--mark);color:var(--ink);font-size:15px;line-height:1.45}
+/* On a phone, Help and Settings sit side by side at the top right, clear of the collection names. */
+@media(max-width:700px){.sidebar-bottom{display:flex;flex-direction:row;align-items:center;gap:2px}.sidebar-bottom .nav{padding:8px 10px}}
