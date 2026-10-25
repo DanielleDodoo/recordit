@@ -38,6 +38,7 @@ import {addMoment,applyMoments,restoreMoments,removeMoment} from './moments.js';
 import {keepAwake} from './keep-awake.js';
 import {startLiveWords} from './live-words.js';
 import {placeholderTitle,titleFromSummary} from './auto-title.js';
+import {loadGoogleSignIn,driveToken,sendToDrive} from './phone-drive.js';
 const nativeAiUnavailable='Summaries and AI answers are made by recordit on your laptop. Find words and saved answers work here.';
 function requireGeneration(){if(noLaptop)throw Error(nativeAiUnavailable);}
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -117,6 +118,7 @@ async function openNote(id){
  window.scrollTo(0,0);
  // A recording from the phone arrives already transcribed: its summary, and so its title, is made on first opening.
  if(!noLaptop&&!busy&&selected.titleAuto&&selected.transcript?.trim()&&!selected.generatedSummary)summarise(selected).catch(()=>{});
+ showSent(selected);
 }
 function showSync(){if(!selected)return;showTranscriptSave();$('sync-status').textContent=selected.backedRevision===selected.revision&&selected.backedFolder===activeBackupFolder&&(selected.backedTargetId||selected.id)===(selected.backupId||selected.id)?'Copied to Drive folder':libraryStorage.getItem('backupEnabled')==='true'?'Local copy · backup pending':'Saved on this device';}
 function showFiling(){if(!selected)return;$('category').value=selected.category;const reason=(selected.collectionReason||'Add a transcript or tags for automatic topic matching.').replace(selected.collectionManual?'Several collections match equally. Choose a primary collection. ':'\u0000','');$('filing-reason').textContent=(selected.collectionManual?'Primary chosen by you. ':'')+reason;$('secondary-collections').textContent='Also appears in: '+((selected.secondaryCategories||[]).join(' · ')||'no secondary collections yet');}
@@ -463,9 +465,9 @@ async function startPhoneRecording(){
 const liveWordsSupported=!isNative&&!!(globalThis.SpeechRecognition||globalThis.webkitSpeechRecognition);
 let liveWords=null,liveWanted=false,lastAudioAt=0,momentWatch=null,noteMomentAt=0;
 function showMomentCount(note){const marked=restoreMoments(note.moments),h=marked.filter(m=>m.kind==='highlight').length,n=marked.length-h;$('moment-count').hidden=!marked.length;$('moment-count').textContent=[h&&`${h} highlight${h>1?'s':''}`,n&&`${n} note${n>1?'s':''}`].filter(Boolean).join(' · ')+' marked';}
-function addLiveLine(text,className,t){const line=document.createElement('p');line.textContent=text;if(className)line.className=className;if(Number.isFinite(t)){line.dataset.t=t;line.tabIndex=0;line.setAttribute('role','button');line.setAttribute('aria-pressed','false');}$('live-words').append(line);while($('live-words').children.length>40)$('live-words').firstChild.remove();$('live-words').scrollTop=$('live-words').scrollHeight;}
-function endLiveWords(message){liveWanted=false;if(!liveWords)return;liveWords.stop();liveWords=null;if(message)addLiveLine(message,'live-note');}
-function pauseLive(){if(!liveWords)return;liveWords.stop();liveWords=null;addLiveLine('Paused','live-note');}
+function addLiveLine(text,className,t){const line=document.createElement('p');line.textContent=text;if(className)line.className=className;if(Number.isFinite(t)){line.dataset.t=t;line.dataset.added=Date.now();line.tabIndex=0;line.setAttribute('role','button');line.setAttribute('aria-pressed','false');}$('live-words').append(line);while($('live-words').children.length>40)$('live-words').firstChild.remove();$('live-words').scrollTop=$('live-words').scrollHeight;return line;}
+function endLiveWords(message){liveWanted=false;commitInterim();if(!liveWords)return;liveWords.stop();liveWords=null;if(message)addLiveLine(message,'live-note');}
+function pauseLive(){commitInterim();if(!liveWords)return;liveWords.stop();liveWords=null;addLiveLine('Paused','live-note');}
 function resumeLive(){if(liveWanted&&!liveWords&&recording&&recorder?.state==='recording')startLive();}
 function beginMoments(note,{live=true}={}){
  note.moments=restoreMoments(note.moments);lastAudioAt=0;$('moment-actions').hidden=false;$('live-words').replaceChildren();$('live-words-option').hidden=true;showMomentCount(note);
@@ -479,19 +481,39 @@ function beginMoments(note,{live=true}={}){
 function startLive(){
  const unavailable=()=>{liveWords=null;liveWanted=false;if(!$('live-words').querySelector('p:not(.live-note)'))addLiveLine('Live words aren’t available in this browser. Your full transcript comes after you finish.','live-note');};
  if(!liveWordsSupported)return unavailable();
- // A line is placed at the moment its first words appeared, so a tap marks the passage it was said in.
- let interim=null,said=null;
- liveWords=startLiveWords({
-  onLine:text=>{interim?.remove();interim=null;addLiveLine(text,'',said??Math.max(0,elapsed-2));said=null;},
-  onInterim:text=>{if(!text){interim?.remove();interim=null;return;}said??=elapsed;if(!interim){interim=document.createElement('p');interim.className='interim';$('live-words').append(interim);}interim.textContent=text;$('live-words').scrollTop=$('live-words').scrollHeight;},
-  onUnavailable:unavailable});
+ interimShown=0;interimSaid=null;
+ liveWords=startLiveWords({onLine:finishLine,onInterim:showInterim,onUnavailable:unavailable});
+}
+// Words still in progress (grey). A phone can keep a whole stretch of talk in progress without finishing it, so what
+// is showing becomes its own line at each pause, or when tapped, and the words after it carry on below. Each line is
+// placed at the moment its first words appeared, so a tap marks the passage it was said in.
+let interimLine=null,interimSaid=null,interimShown=0,interimHead='',interimPause=null;
+function showInterim(text){
+ clearTimeout(interimPause);
+ if(interimShown&&!text.startsWith(interimHead))interimShown=0;   // a new stretch, not more of the last one
+ const fresh=text.slice(interimShown).trim();
+ if(!fresh){interimLine?.remove();interimLine=null;return;}
+ interimSaid??=elapsed;
+ if(!interimLine){interimLine=document.createElement('p');interimLine.className='interim';interimLine.tabIndex=0;interimLine.setAttribute('role','button');$('live-words').append(interimLine);}
+ interimLine.textContent=fresh;interimLine.dataset.upto=text.length;interimLine.dataset.head=text.slice(0,12);$('live-words').scrollTop=$('live-words').scrollHeight;
+ interimPause=setTimeout(commitInterim,2000);
+}
+function commitInterim(){
+ clearTimeout(interimPause);if(!interimLine)return null;
+ const text=interimLine.textContent;interimShown=Number(interimLine.dataset.upto)||0;interimHead=interimLine.dataset.head||'';interimLine.remove();interimLine=null;
+ const line=addLiveLine(text,'',interimSaid??Math.max(0,elapsed-2));interimSaid=null;return line;
+}
+function finishLine(text){
+ clearTimeout(interimPause);interimLine?.remove();interimLine=null;
+ const rest=(interimShown&&text.startsWith(interimHead)?text.slice(interimShown):text).trim();
+ if(rest)addLiveLine(rest,'',interimSaid??Math.max(0,elapsed-2));
+ interimSaid=null;interimShown=0;
 }
 function endMoments(){endLiveWords();liveWanted=false;clearInterval(momentWatch);momentWatch=null;$('moment-actions').hidden=true;$('moment-note-form').hidden=true;$('moment-count').hidden=true;$('live-words').hidden=true;$('live-words-option').hidden=!liveWordsSupported;}
 function markMoment(kind,text='',t=elapsed,line=null){
  const note=recording;if(!note)return;const id=crypto.randomUUID();
  note.moments=addMoment(note.moments,{t,kind,text,id});saving=saving.then(()=>db.save(note)).catch(()=>{});showMomentCount(note);
  if(kind!=='highlight')return;
- line??=[...$('live-words').querySelectorAll('p[data-t]:not(.marked)')].at(-1);
  if(line){line.classList.add('marked');line.dataset.moment=id;line.setAttribute('aria-pressed','true');}
 }
 function toggleLineHighlight(line){
@@ -499,8 +521,10 @@ function toggleLineHighlight(line){
  if(line.dataset.moment){note.moments=removeMoment(note.moments,line.dataset.moment);delete line.dataset.moment;line.classList.remove('marked');line.setAttribute('aria-pressed','false');saving=saving.then(()=>db.save(note)).catch(()=>{});showMomentCount(note);}
  else markMoment('highlight',line.textContent,Number(line.dataset.t),line);
 }
-$('live-words').onclick=event=>{const line=event.target.closest('p[data-t]');if(line)toggleLineHighlight(line);};
-$('live-words').onkeydown=event=>{const line=event.target.closest('p[data-t]');if(line&&(event.key==='Enter'||event.key===' ')){event.preventDefault();toggleLineHighlight(line);}};
+// A tap on grey words in progress makes them a line of their own and highlights it.
+const tapped=target=>{const line=target.closest('p[data-t], p.interim');return line?.classList.contains('interim')?commitInterim():line;};
+$('live-words').onclick=event=>{const line=tapped(event.target);if(line)toggleLineHighlight(line);};
+$('live-words').onkeydown=event=>{if(event.key!=='Enter'&&event.key!==' ')return;const line=tapped(event.target);if(line){event.preventDefault();toggleLineHighlight(line);}};
 // The screen staying on, said plainly; and if recordit was left or the phone locked anyway, how long for.
 function showAwake(how){$('awake-note').hidden=how!=='none';$('awake-note').textContent='Keep your screen on until you finish: this phone may lock it, and recordit can’t hear while it’s locked.';}
 let hiddenAt=0;
@@ -513,24 +537,56 @@ document.addEventListener('visibilitychange',()=>{
 });
 $('live-words-option').hidden=!liveWordsSupported;try{$('live-words-on').checked=localStorage.liveWords!=='off';}catch{}
 $('live-words-on').onchange=()=>{try{localStorage.liveWords=$('live-words-on').checked?'on':'off';}catch{}};
-$('mark-highlight').onclick=()=>markMoment('highlight');
+$('mark-highlight').onclick=()=>{
+ const last=[...$('live-words').querySelectorAll('p[data-t]')].at(-1),recent=last&&!last.dataset.moment&&Date.now()-Number(last.dataset.added)<8000?last:null;
+ const line=commitInterim()??recent;
+ if(line)markMoment('highlight',line.textContent,Number(line.dataset.t),line);else markMoment('highlight');
+};
 $('mark-note').onclick=()=>{noteMomentAt=elapsed;$('moment-note-form').hidden=false;$('moment-note-text').value='';$('moment-note-text').focus();};
 $('moment-note-cancel').onclick=()=>{$('moment-note-form').hidden=true;};
 $('moment-note-form').onsubmit=event=>{event.preventDefault();const text=$('moment-note-text').value.trim();if(text)markMoment('note',text,noteMomentAt);$('moment-note-form').hidden=true;};
 // On a phone, a recording reaches the laptop through Google Drive: the share sheet sends the audio and its marked
 // moments to the "recordit inbox" folder, where the laptop transcribes it and places the moments.
-async function sendToLaptop(){
- const note=selected,audio=note&&await db.getAudio(note.id);if(!audio?.blob)throw Error('This conversation has no audio to send.');
- const base=(note.title||'Recording').replace(/[\\/:*?"<>|]+/g,'-').trim().slice(0,100)||'Recording';
+// The recording and its highlights and notes, named alike (with when it was made, so names never clash).
+function laptopFiles(note,audio){
+ const made=new Date(note.created||Date.now()),two=n=>String(n).padStart(2,'0'),stamp=`${made.getFullYear()}-${two(made.getMonth()+1)}-${two(made.getDate())} ${two(made.getHours())}${two(made.getMinutes())}`;
+ const base=((note.title||'Recording').replace(/[\\/:*?"<>|]+/g,'-').trim().slice(0,90)||'Recording')+' · '+stamp;
  const type=audio.blob.type||note.audioType||'audio/mp4',ext=/mp4|m4a|aac/.test(type)?'m4a':/ogg/.test(type)?'ogg':'webm';
  const marks={app:'recordit',version:1,title:note.title,titleAuto:note.titleAuto===true,created:note.created,duration:note.duration,moments:restoreMoments(note.moments)};
- const files=[new File([audio.blob],`${base}.${ext}`,{type}),new File([JSON.stringify(marks)],`${base}.marks.json`,{type:'application/json'})];
+ return [new File([audio.blob],`${base}.${ext}`,{type}),new File([JSON.stringify(marks)],`${base}.marks.json`,{type:'application/json'})];
+}
+// The fallback: the phone's share sheet, to put both files in Google Drive by hand.
+async function shareToLaptop(){
+ const note=selected,audio=note&&await db.getAudio(note.id);if(!audio?.blob)throw Error('This conversation has no audio to send.');
+ const files=laptopFiles(note,audio);
  if(navigator.canShare?.({files})){
   try{await navigator.share({files,title:note.title});}catch(error){if(error.name==='AbortError')return;throw error;}
   toast('In the share sheet choose Drive, then the recordit inbox folder.');
  }else{for(const file of files)download(file,file.name);toast('Saved. Put both files in the recordit inbox folder in Google Drive.');}
 }
-$('send-laptop').hidden=!onPhoneWeb;$('send-laptop').onclick=run(sendToLaptop);
+// Send to laptop: straight into Google Drive, where the laptop picks it up. Progress and problems stay under the button.
+function sendSay(text,problem=false){$('send-status').hidden=false;$('send-status').textContent=text;$('send-status').classList.toggle('problem',problem);$('send-share').hidden=!problem;}
+function showSent(note){if(!onPhoneWeb)return;$('send-share').hidden=true;$('send-status').classList.remove('problem');$('send-status').hidden=!note?.sentToLaptop;if(note?.sentToLaptop)$('send-status').textContent='Sent to your laptop ✓ '+date(note.sentToLaptop);}
+async function sendDirect(note,signedIn){
+ $('send-laptop').disabled=true;
+ try{
+  sendSay('Signing in to Google…');
+  const token=await signedIn,audio=await db.getAudio(note.id);if(!audio?.blob)throw Error('This conversation has no audio to send.');
+  sendSay('Sending to your laptop… 0%');
+  await sendToDrive(laptopFiles(note,audio),{token,onProgress:share=>sendSay('Sending to your laptop… '+Math.round(share*100)+'%')});
+  note.sentToLaptop=Date.now();await commit(note);
+  if(selected?.id===note.id)sendSay('Sent ✓ Your laptop will transcribe it in a few minutes, while it’s on with recordit running.');
+ }catch(error){console.error(error);if(selected?.id===note.id)sendSay(error.message||'Sending didn’t work. Your recording is still on this phone.',true);}
+ finally{$('send-laptop').disabled=false;}
+}
+$('send-laptop').hidden=!onPhoneWeb;
+$('send-laptop').onclick=()=>{
+ const note=selected;if(!note||$('send-laptop').disabled)return;
+ if(note.sentToLaptop&&!confirm('This recording was already sent to your laptop. Send it again?'))return;
+ sendDirect(note,driveToken());   // asked for straight from the tap, so the Google window is allowed to open
+};
+$('send-share').onclick=run(shareToLaptop);
+if(onPhoneWeb)loadGoogleSignIn();
 function resetRecorder(){$('mic-mode').disabled=false;$('record-start').hidden=true;$('record-close').hidden=true;$('record-stop').hidden=true;$('record-stop').disabled=false;$('record-pause').hidden=true;$('record-close').disabled=false;$('record-title').disabled=false;$('record-category').disabled=false;$('record-source').disabled=false;$('record-heading').textContent='Recording';$('record-status').textContent='';$('record-title').value='';$('timer').textContent='00:00';$('record-pause').textContent='Pause';$('awake-note').hidden=$('away-note').hidden=true;}
 async function prepare(){
  if(onPhoneWeb){$('model-status').textContent='On this phone, transcripts are made by your laptop: open a recording and choose Send to laptop.';return;}

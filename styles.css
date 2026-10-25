@@ -116,3 +116,12 @@ header{height:64px}h1,.page-heading h1{font-size:40px;letter-spacing:-1.3px}.pag
 .record-warning{margin:6px 0 0;padding:10px 12px;border-radius:10px;background:var(--mark);color:var(--ink);font-size:15px;line-height:1.45}
 /* On a phone, Help and Settings sit side by side at the top right, clear of the collection names. */
 @media(max-width:700px){.sidebar-bottom{display:flex;flex-direction:row;align-items:center;gap:2px}.sidebar-bottom .nav{padding:8px 10px}}
+
+/* Send to laptop: progress and the result, right under the buttons; a problem stays until the next try. */
+.send-result{margin:4px 0 8px}
+#send-status{margin:6px 0;font-size:15px;line-height:1.45}
+#send-status.problem{padding:10px 12px;border-radius:10px;background:var(--mark);color:var(--ink)}
+
+/* Live lines, finished or still in progress, respond to a tap; a long press doesn't start selecting text instead. */
+.live-words p.interim{cursor:pointer}
+.live-words p[data-t],.live-words p.interim{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
