@@ -584,7 +584,7 @@ if(isNative){$('offline-help').textContent='Speech assets are bundled, but physi
 function renderCollections(){
  const names=[...new Set(['Unfiled',...collections.map(c=>c.name),...(selected?[selected.category]:[])])];
  for(const id of ['category','record-category']){const value=$(id).value;$(id).innerHTML=names.map(n=>`<option>${esc(n)}</option>`).join('');$(id).value=names.includes(value)?value:'Unfiled';}
- $('collection-nav').innerHTML=['Unfiled',...collections.map(c=>c.name)].map(n=>`<button class="nav ${filter===n?'active':''}" data-filter="${esc(n)}" aria-label="${esc(n)}" title="${esc(n)}"><span class="nav-icon" aria-hidden="true">${({Ronnie:"✦",AI:"✧",Finance:"◈",Personal:"○",Unfiled:"◇"})[n]||"▱"}</span><span>${esc(n)}</span></button>`).join('');bindFilters();
+ $('collection-nav').innerHTML=['Unfiled',...collections.map(c=>c.name)].map(n=>`<button class="nav ${filter===n?'active':''}" data-filter="${esc(n)}" aria-label="${esc(n)}" title="${esc(n)}"><span class="nav-icon" aria-hidden="true">${({Ronnie:"✦",AI:"✧",Consciousness:"◉",Finance:"◈",Personal:"○",Unfiled:"◇"})[n]||"▱"}</span><span>${esc(n)}</span></button>`).join('');bindFilters();
 }
 function renderCollectionEditor(){
  $('collection-recovery').hidden=libraryStorage.getItem(COLLECTION_PENDING)===null;
