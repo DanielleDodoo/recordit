@@ -8,7 +8,8 @@ export function startLiveWords({onLine,onInterim=()=>{},onUnavailable=()=>{},lan
  const give_up=reason=>{if(stopped)return;stopped=true;try{recognition?.abort();}catch{}onUnavailable(reason);};
  const begin=()=>{
   if(stopped)return;
-  recognition=new Recognition();recognition.continuous=true;recognition.interimResults=true;recognition.lang=lang;
+  try{recognition=new Recognition();}catch{return give_up('start');}
+  recognition.continuous=true;recognition.interimResults=true;recognition.lang=lang;
   recognition.onresult=event=>{
    let interim='';
    for(let i=event.resultIndex;i<event.results.length;i++){const result=event.results[i],text=result[0]?.transcript?.trim()||'';if(result.isFinal){if(text)onLine(text);}else interim+=' '+text;}

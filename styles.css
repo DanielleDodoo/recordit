@@ -95,3 +95,5 @@ header{height:64px}h1,.page-heading h1{font-size:40px;letter-spacing:-1.3px}.pag
 .live-words .marked{background:var(--mark);border-radius:4px;padding:0 4px}.live-words .marked::before{content:'★ '}
 .live-words .live-note{color:var(--muted);font-size:13px}
 #send-laptop{margin-right:4px}
+/* Quick guide: short steps, easy to scan. */
+.help h3{font-size:16px;margin:18px 0 6px}.help ol,.help ul{margin:0;padding-left:22px}.help li{font-size:15px;line-height:1.6;margin:3px 0}

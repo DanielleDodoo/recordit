@@ -414,8 +414,8 @@ async function startRecording(){
    if(!screenStream.getAudioTracks().length){screenStream.getTracks().forEach(t=>t.stop());screenStream=null;throw Error('No audio was shared. Select the video’s browser tab and enable Share audio, then try again.');}
    stream=new MediaStream(screenStream.getAudioTracks());
    screenStream.getVideoTracks().forEach(track=>track.onended=()=>{if(recorder&&recorder.state!=='inactive')recorder.stop();});
-  }else{stream=await navigator.mediaDevices.getUserMedia(micConstraints($('mic-mode').value));mic=micSummary($('mic-mode').value,stream.getAudioTracks()[0]?.getSettings?.()||{});}
-  const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+  }else{$('record-status').textContent='Asking to use the microphone…';stream=await navigator.mediaDevices.getUserMedia(micConstraints($('mic-mode').value));mic=micSummary($('mic-mode').value,stream.getAudioTracks()[0]?.getSettings?.()||{});}
+  if(typeof MediaRecorder==='undefined')throw Error('This browser cannot record audio. Update your phone, or open recordit in Safari.');const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));try{recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});}catch{recorder=new MediaRecorder(stream);}
   recording={id:crypto.randomUUID(),title:$('record-title').value.trim()||'Conversation · '+date(Date.now()),category:$('record-category').value,collectionManual:$('record-category').value!=='Unfiled',created:Date.now(),duration:0,transcript:'',chunks:[],chats:[],revision:1,recording:true,audioType:recorder.mimeType,...(mic?{mic}:{})};
   await db.save(recording);let parts=[];elapsed=0;lastTick=Date.now();const note=recording;
   // Each few seconds only the new piece is added to the library's copy; if that copy is ever out of step,
@@ -427,7 +427,8 @@ async function startRecording(){
   recorder.start(5000);try{wakeLock=await navigator.wakeLock?.request('screen');}catch{}
   // If the microphone is taken away while live words are running, live words stop so the recording can carry on.
   stream.getAudioTracks()[0]?.addEventListener('mute',()=>endLiveWords('Live words were switched off to keep your recording safe.'));
-  beginMoments(note,{live:$('record-source').value==='microphone'});
+  // Highlight, Note and live words are extras: a problem with them must never stop the recording.
+  try{beginMoments(note,{live:$('record-source').value==='microphone'});}catch(error){console.error(error);}
   timerInterval=setInterval(()=>{const now=Date.now();if(recorder?.state==='recording')elapsed+=(now-lastTick)/1000;lastTick=now;$('timer').textContent=clock(elapsed);},250);
   $('record-start').hidden=true;$('record-stop').hidden=false;$('record-pause').hidden=false;$('record-close').disabled=true;$('record-title').disabled=true;$('record-category').disabled=true;$('record-source').disabled=true;$('mic-mode').disabled=true;$('record-heading').textContent='Just be here. We’re listening.';$('record-status').textContent='Recording'+(mic?' · '+MIC_MODES[mic.mode].label.split(' · ')[0]+' mic':'')+' · audio saved locally every few seconds';
  }catch(e){stream?.getTracks().forEach(t=>t.stop());screenStream?.getTracks().forEach(t=>t.stop());screenStream=null;recording=null;recorder=null;throw e;}finally{$('record-start').disabled=false;$('record-close').disabled=Boolean(recording);}
@@ -545,7 +546,7 @@ async function settings(){
  if(noLaptop){$('drive-status').textContent='Direct phone Drive backup is not activated. Recordings stay on this device.';}else try{const status=await(await fetch('/api/status',{cache:'no-store'})).json();setBackupDestination(status.backupFolder);$('drive-status').textContent=status.available?'Laptop Drive bridge is available. Backups contain audio and a readable JSON transcript.':'Google Drive is not accessible on the laptop yet.';}catch{$('drive-status').textContent='Laptop bridge unavailable. Recordings remain on this device.';}
 }
 $('new').onclick=openRecorder;$('record-hero').onclick=openRecorder;$('record-close').onclick=()=>{if(!recording&&!$('record-start').disabled)$('record-dialog').close();};$('record-dialog').addEventListener('cancel',e=>{if(recording||$('record-start').disabled)e.preventDefault();});
-$('record-start').onclick=run(startRecording);$('record-stop').onclick=()=>{if(!recorder)return;$('record-stop').disabled=true;recorder.stop();};$('record-pause').onclick=()=>{if(recorder.state==='recording'){recorder.pause();$('record-pause').textContent='Resume';$('record-status').textContent='Paused · your audio is safe';}else{recorder.resume();lastTick=Date.now();$('record-pause').textContent='Pause';$('record-status').textContent='Recording · audio saved locally every few seconds';}};
+$('record-start').onclick=async()=>{try{await startRecording();}catch(e){console.error(e);const why=e?.name==='NotAllowedError'?'recordit isn’t allowed to use the microphone. On iPhone: Settings → Apps → Safari → Microphone → Allow, then try again.':e?.name==='NotFoundError'?'No microphone was found.':(e?.message||'Something went wrong.');$('record-status').textContent='Recording didn’t start. '+why;toast('Recording didn’t start. '+why);}};$('record-stop').onclick=()=>{if(!recorder)return;$('record-stop').disabled=true;recorder.stop();};$('record-pause').onclick=()=>{if(recorder.state==='recording'){recorder.pause();$('record-pause').textContent='Resume';$('record-status').textContent='Paused · your audio is safe';}else{recorder.resume();lastTick=Date.now();$('record-pause').textContent='Pause';$('record-status').textContent='Recording · audio saved locally every few seconds';}};
 $('back').onclick=()=>{$('detail').hidden=true;$('library').hidden=false;$('player').pause();questionDrafts.select(null);selected=null;refresh();};
 function bindFilters(){document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;$('breadcrumb').textContent=filter==='All'?'All conversations':filter;$('detail').hidden=true;$('library').hidden=false;$('player').pause();questionDrafts.select(null);selected=null;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderList();});}
 $('library-sort').onchange=renderList;$('library-search-field').onchange=renderList;$('library-search-collection').onchange=renderList;$('search').oninput=renderList;$('import').onclick=()=>$('file').click();$('file').onchange=run(async e=>{try{await importFile(e.target.files[0]);}finally{e.target.value='';}});
@@ -721,3 +722,5 @@ $('restore-library').onclick=async()=>{
 
 
 
+// The quick guide: every feature in a few plain steps, one tap from the sidebar.
+$('help-open').onclick=()=>$('help-dialog').showModal();$('help-close').onclick=()=>$('help-dialog').close();
