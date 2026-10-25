@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "onnx-community/Qwen3-4B-Instruct-2507-ONNX",
+      "summary": true,
+      "revision": "2bdfea4417ee390519508a6bc7dfbc36f3572981",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4.onnx_data",
+        "onnx/model_q4.onnx_data_1"
+      ]
+    },
+    {
+      "id": "onnx-community/whisper-tiny.en",
+      "revision": "2575352d61be1bf7225cf8f8b268a4678025fc58",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "onnx/encoder_model_quantized.onnx",
+        "onnx/decoder_model_merged_quantized.onnx"
+      ]
+    },
+    {
+      "id": "Xenova/distilbert-base-cased-distilled-squad",
+      "revision": "bdbb0a5e9c617c3c7ea9f3cbaf2be3ad871bcd7d",
+      "files": [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "onnx/model_quantized.onnx"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "url": "/vendor/transformers.min.js",
+      "bytes": 888173
+    },
+    {
+      "url": "/vendor/ort-wasm-simd-threaded.jsep.mjs",
+      "bytes": 44484
+    },
+    {
+      "url": "/vendor/ort-wasm-simd-threaded.jsep.wasm",
+      "bytes": 21596019
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/config.json",
+      "bytes": 2197
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/generation_config.json",
+      "bytes": 1646
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/preprocessor_config.json",
+      "bytes": 339
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/tokenizer.json",
+      "bytes": 2405679
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/tokenizer_config.json",
+      "bytes": 282662
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/special_tokens_map.json",
+      "bytes": 2173
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/onnx/encoder_model_quantized.onnx",
+      "bytes": 10124993
+    },
+    {
+      "url": "/models/onnx-community/whisper-tiny.en/onnx/decoder_model_merged_quantized.onnx",
+      "bytes": 30718858
+    },
+    {
+      "url": "/models/Xenova/distilbert-base-cased-distilled-squad/config.json",
+      "bytes": 569
+    },
+    {
+      "url": "/models/Xenova/distilbert-base-cased-distilled-squad/tokenizer.json",
+      "bytes": 668923
+    },
+    {
+      "url": "/models/Xenova/distilbert-base-cased-distilled-squad/tokenizer_config.json",
+      "bytes": 321
+    },
+    {
+      "url": "/models/Xenova/distilbert-base-cased-distilled-squad/special_tokens_map.json",
+      "bytes": 125
+    },
+    {
+      "url": "/models/Xenova/distilbert-base-cased-distilled-squad/onnx/model_quantized.onnx",
+      "bytes": 65811627
+    }
+  ]
+}
