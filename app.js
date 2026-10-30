@@ -36,6 +36,7 @@ import {checkAudioSize} from './limits.js';
 import {isNative,noLaptop,onPhoneWeb,startNative,stopNative,pauseNative} from './mobile.js';
 import {addMoment,applyMoments,restoreMoments,removeMoment} from './moments.js';
 import {keepAwake} from './keep-awake.js';
+import {learnLength} from './audio-length.js';
 import {startLiveWords} from './live-words.js';
 import {placeholderTitle,titleFromSummary} from './auto-title.js';
 import {loadGoogleSignIn,driveToken,sendToDrive} from './phone-drive.js';
@@ -114,7 +115,7 @@ async function openNote(id){
  if(request!==noteOpenRequest||selected?.id!==id)return;
  $('attach-audio').hidden=Boolean(audio?.blob);$('attach-audio').disabled=busy;
  $('player').hidden=!audio?.blob;$('export-audio').disabled=!audio?.blob;$('transcribe').disabled=!audio?.blob||busy;
- if(audio?.blob){playerURL=URL.createObjectURL(audio.blob);$('player').src=playerURL;}else $('player').removeAttribute('src');
+ if(audio?.blob){playerURL=URL.createObjectURL(audio.blob);learnLength($('player'),selected.duration);$('player').src=playerURL;}else $('player').removeAttribute('src');
  window.scrollTo(0,0);
  // A recording from the phone arrives already transcribed: its summary, and so its title, is made on first opening.
  if(!noLaptop&&!busy&&selected.titleAuto&&selected.transcript?.trim()&&!selected.generatedSummary)summarise(selected).catch(()=>{});
@@ -128,6 +129,7 @@ function renderSummary(){
  $('summary').innerHTML=valid?Object.entries(GROUPS).map(([key,title])=>`<section><h3>${title}</h3>${saved[key].length?`<ul>${saved[key].map(b=>`<li>${esc(b.text)} <span class="citations">${b.evidence.map(e=>`<a href="#source-${e.id}" data-source="${e.id}" title="${esc(e.quote)}" aria-label="Read supporting transcript passage ${e.id}">[${e.id}]</a>`).join(' ')}</span></li>`).join('')}</ul>`:'<p class="caption">No supported '+(key==='next_steps'?'next steps':key)+' identified.</p>'}</section>`).join('')+`<p class="caption">Generated offline.${saved.parts>1?` Covers ${saved.parts} transcript sections in order; related themes may recur.`:''}${saved.rejected?' Some bullets were omitted because their source references were missing or invalid.':''} Check the sources: AI can misinterpret them.</p>`:noLaptop?'<p class="muted">'+nativeAiUnavailable+'</p>':'<p class="muted">Generate main themes, conclusions and next steps with the offline engine on your laptop. Each bullet links to its supporting transcript passage.</p>';
  $('summary').querySelectorAll('[data-source]').forEach(a=>a.onclick=e=>{e.preventDefault();$('editor').hidden=true;$('transcript-view').hidden=false;const target=$('source-'+a.dataset.source);target?.scrollIntoView({behavior:'smooth',block:'center'});document.querySelectorAll('.source-highlight').forEach(el=>el.classList.remove('source-highlight'));target?.classList.add('source-highlight');target?.focus({preventScroll:true});});
 }
+let activePassage={note:null,id:null};   // the sentence whose tools are showing, kept across redraws
 function renderTranscript(){
  const timingIssue=subtitleIssue(selected.chunks);$('export-srt').disabled=Boolean(timingIssue);$('export-srt').title=timingIssue||'Save timed transcript captions as SRT';
  const correctionSnapshot=correctionKey(selected),canCorrect=Boolean(correctionRanges(selected));
@@ -151,7 +153,32 @@ function renderTranscript(){
  const staleLabels=speakerLabels.filter(label=>!chunks.some(source=>speakerMatches(label,source)));
  const staleList=staleLabels.length?'<details class="saved-speakers"><summary>Earlier speaker labels ('+staleLabels.length+')</summary><p class="caption">Transcript changed. These saved labels are not applied to the current text.</p>'+staleLabels.map(label=>'<p><strong>'+esc(label.name)+'</strong>: '+esc(label.sourceText)+'</p>').join('')+'</details>':'';
  const highlightedList=highlights.length?'<details class="saved-highlights"><summary>Your highlights ('+highlights.length+')</summary>'+highlights.map((h,i)=>'<div class="highlight-entry"><span>'+esc(h.sourceText.slice(h.start,h.end))+'</span> '+(chunks.some(c=>highlightMatches(h,c))?'<button class="subtle" data-highlight-jump="'+h.sourceId+'">Go to passage '+h.sourceId+'</button>':'<small>Transcript changed · saved excerpt</small>')+' <button class="subtle" data-highlight-remove="'+i+'" aria-label="Remove highlight '+(i+1)+'">Remove</button></div>').join('')+'</details>':'';
- $('transcript-view').innerHTML=highlightedList+list+commentList+staleList+(chunks.length?chunks.map(c=>{const saved=bookmarks.some(b=>bookmarkMatches(b,c));return `${gapsBefore(Number(c.timestamp?.[0])||0)}<div class="transcript-line" id="source-${c.id}" tabindex="-1"><span class="caption">[${c.id}] </span>${c.timestamp?`<button class="timestamp" data-time="${Number(c.timestamp[0])||0}">${clock(c.timestamp[0]||0)}</button>`:''}<button class="bookmark-toggle subtle" data-bookmark="${c.id}" aria-pressed="${saved}" aria-label="${saved?'Remove bookmark from':'Bookmark'} passage ${c.id}">${saved?'★':'☆'}</button><button class="comment-toggle subtle" data-comment-add="${c.id}" aria-label="Comment on passage ${c.id}">✎</button><button class="speaker-label subtle" data-speaker="${c.id}" aria-label="Set speaker for passage ${c.id}">${esc(speakerLabels.find(label=>speakerMatches(label,c))?.name||"Speaker")}</button>${canCorrect?`<button class="subtle" data-correct-passage="${c.id}" aria-label="Correct text in passage ${c.id}">Correct</button>`:''}<span class="passage-text">${highlightHtml(c,highlights)}</span></div>`;}).join('')+gapsBefore(Infinity):'<p class="muted">Your recording is safe here. Choose “Transcribe audio” to turn it into text on this device.</p>');
+ // Each person's turn is one paragraph with their name once, like Otter. Every sentence keeps its own place (its id,
+ // so search, highlights and jumps still find it) and its own tools - time, star, comment, who said it, correct -
+ // which appear when the sentence is tapped. Stars and comments stay marked on the sentence.
+ const nameOf=c=>speakerLabels.find(label=>speakerMatches(label,c))?.name||'';
+ const turnsHtml=()=>{
+  let html='',open=null;
+  const close=()=>{if(open!==null){html+='</p></div>';open=null;}};
+  for(const c of chunks){
+   const gap=gapsBefore(Number(c.timestamp?.[0])||0),name=nameOf(c),at=Number(c.timestamp?.[0])||0;
+   if(gap){close();html+=gap;}
+   if(open===null||name!==open){close();open=name;html+=`<div class="turn"><div class="turn-head"><button class="speaker-label subtle" data-speaker="${c.id}" aria-label="Who is speaking from passage ${c.id}">${esc(name||'Speaker')}</button>${c.timestamp?` <button class="timestamp" data-time="${at}">${clock(at)}</button>`:''}</div><p class="turn-text">`;}
+   const saved=bookmarks.some(b=>bookmarkMatches(b,c)),noted=comments.some(m=>commentMatches(m,c)),active=activePassage.note===noteId&&activePassage.id===c.id;
+   html+=`<span class="transcript-line${saved?' saved':''}${noted?' noted':''}${active?' active':''}" id="source-${c.id}" tabindex="-1"><span class="passage-text">${highlightHtml(c,highlights)}</span><span class="line-tools">${c.timestamp?`<button class="timestamp" data-time="${at}">${clock(at)}</button>`:''}<button class="bookmark-toggle subtle" data-bookmark="${c.id}" aria-pressed="${saved}" aria-label="${saved?'Remove bookmark from':'Bookmark'} passage ${c.id}">${saved?'★':'☆'}</button><button class="comment-toggle subtle" data-comment-add="${c.id}" aria-label="Comment on passage ${c.id}">✎</button><button class="speaker-label subtle" data-speaker="${c.id}" aria-label="Set speaker for passage ${c.id}">${esc(name||'Speaker')}</button>${canCorrect?`<button class="subtle" data-correct-passage="${c.id}" aria-label="Correct text in passage ${c.id}">Correct</button>`:''}</span></span> `;
+  }
+  close();
+  return html+gapsBefore(Infinity);
+ };
+ $('transcript-view').innerHTML=highlightedList+list+commentList+staleList+(chunks.length?turnsHtml():'<p class="muted">Your recording is safe here. Choose “Transcribe audio” to turn it into text on this device.</p>');
+ $('transcript-view').onclick=event=>{
+  const line=event.target.closest('.turn .transcript-line');
+  if(!line||event.target.closest('button')||!window.getSelection()?.isCollapsed)return;
+  const id=Number(line.id.slice(7)),open=line.classList.contains('active');
+  $('transcript-view').querySelectorAll('.transcript-line.active').forEach(l=>l.classList.remove('active'));
+  activePassage=open?{note:null,id:null}:{note:noteId,id};
+  if(!open)line.classList.add('active');
+ };
  const changed=async change=>{const fresh=await db.editAnswers(noteId,change);if(!fresh)throw Error('This conversation changed. Reopen it and try again.');await refresh();if(selected?.id===noteId){selected=fresh;renderTranscript();renderWordSearch();}scheduleSync();};
  $('transcript-view').querySelectorAll('[data-correct-passage]').forEach(button=>button.onclick=()=>{
   const id=Number(button.dataset.correctPassage),dialog=$('correction-dialog');$('correction-text').value=chunks.find(c=>c.id===id).text;dialog.showModal();$('correction-text').focus();
@@ -317,14 +344,14 @@ function engineProgress(s){
  if(s.state==='receiving'||s.state==='decoding')return 'Preparing the audio on this laptop…';
  return `Transcribing offline on this laptop · words ${pct(s.progress.speech)} · speakers ${pct(s.progress.speakers)} · ${time}. Keep recordit open.`;
 }
-async function engineTranscribe(blob,status){
+async function engineTranscribe(blob,status,people=0){
  if(busy)throw Error('Please wait for the current AI task to finish.');
  busy=true;$('summarise').disabled=true;$('cancel-ai').hidden=false;$('ask-submit').disabled=true;$('transcribe').disabled=true;$('attach-audio').disabled=true;
  const headers={'X-Record-Me-Token':status.token},upload=new AbortController();let jobId=null,cancelled=false;
  $('cancel-ai').onclick=()=>{cancelled=true;upload.abort();if(jobId)fetch('/api/transcribe/'+jobId,{method:'DELETE',headers}).catch(()=>{});};
  try{
   job('Sending the recording to the offline engine on this laptop…');
-  const start=await fetch('/api/transcribe',{method:'POST',headers,body:blob,signal:upload.signal});
+  const start=await fetch('/api/transcribe'+(people?'?people='+people:''),{method:'POST',headers,body:blob,signal:upload.signal});
   if(!start.ok)throw Error(await start.text());
   jobId=(await start.json()).id;
   while(true){
@@ -351,10 +378,10 @@ async function browserTranscribe(blob){
 }
 // A new transcript never overwrites the old one: the current text is archived as an earlier version,
 // and the result is saved against the latest stored conversation, not the snapshot taken before transcribing.
-async function transcribe(){
+async function transcribe(people=0){
  const noteId=selected.id;const audio=await db.getAudio(noteId);if(!audio?.blob)throw Error('This conversation has no audio.');
  let result;
- try{const engine=await speechEngine();result=engine?await engineTranscribe(audio.blob,engine):await browserTranscribe(audio.blob);}
+ try{const engine=await speechEngine();result=engine?await engineTranscribe(audio.blob,engine,people):await browserTranscribe(audio.blob);}
  catch(e){job(e.message);throw e;}
  let fresh;
  try{fresh=await db.editAnswers(noteId,n=>{applyTranscription(n,result,{now:Date.now(),versionId:crypto.randomUUID()});applyMoments(n);autoFile(n);});}
@@ -682,7 +709,9 @@ $('save-transcript').onclick=run(async()=>{
 // Transcribing again first explains that the current transcript is kept.
 $('transcribe').onclick=()=>{if(!selected)return;if(selected.transcript?.trim())$('transcribe-dialog').showModal();else run(transcribe)();};
 $('transcribe-cancel').onclick=()=>$('transcribe-dialog').close();
-$('transcribe-form').onsubmit=event=>{event.preventDefault();$('transcribe-dialog').close();run(transcribe)();};$('summarise').onclick=run(()=>summarise());$('ask-form').onsubmit=e=>{e.preventDefault();run(ask)();};document.querySelectorAll('[data-question]').forEach(b=>b.onclick=()=>{$('question').value=b.dataset.question;run(ask)();});
+// The number of people is remembered for next time: most recordings here are Danielle and Ronnie.
+try{$('transcribe-people').value=localStorage.transcribePeople||'0';}catch{}
+$('transcribe-form').onsubmit=event=>{event.preventDefault();const people=Number($('transcribe-people').value)||0;try{localStorage.transcribePeople=String(people);}catch{}$('transcribe-dialog').close();run(()=>transcribe(people))();};$('summarise').onclick=run(()=>summarise());$('ask-form').onsubmit=e=>{e.preventDefault();run(ask)();};document.querySelectorAll('[data-question]').forEach(b=>b.onclick=()=>{$('question').value=b.dataset.question;run(ask)();});
 $('export-srt').onclick=run(()=>saveToRonnie(new Blob([subtitleText(selected.chunks)],{type:'application/x-subrip;charset=utf-8'}),selected.title,'srt'));
 $('export-text').onclick=run(()=>saveToRonnie(new Blob([JSON.stringify(exportData(selected),null,2)],{type:'application/json'}),selected.title,'json'));
 $('export-transcript').onclick=run(async()=>{if(!selected.transcript?.trim()){toast('Transcribe the recording first.');return;}const summary=selected.generatedSummary?.sourceKey===sourceKey(selected)?selected.generatedSummary:null;await saveToRonnie(new Blob([readableMarkdown(selected,summary,labelledTranscript(selected))],{type:'text/markdown;charset=utf-8'}),selected.title,'md');});

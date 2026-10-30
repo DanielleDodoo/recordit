@@ -18,6 +18,8 @@ export function bindSpeakerFilter({select,status,view,detail,highlightedOnly}){
    if(highlightedOnly?.checked&&!highlighted.has(Number(row.id.slice(7))))row.hidden=true;
    total++;if(!row.hidden)shown++;
   }
+  // A paragraph (one person's turn) is hidden only when every line in it is.
+  for(const turn of view.querySelectorAll('.turn'))if(turn.querySelectorAll)turn.hidden=![...turn.querySelectorAll('.transcript-line')].some(row=>!row.hidden);
   const filtered=select.value!=='all'||highlightedOnly?.checked;
   status.textContent=!filtered?'':`${shown} of ${total} passages${shown?'':' · No passages match these filters'} · Find searches the whole transcript`;
  }

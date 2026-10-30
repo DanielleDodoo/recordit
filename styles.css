@@ -132,3 +132,20 @@ header{height:64px}h1,.page-heading h1{font-size:40px;letter-spacing:-1.3px}.pag
 .live-words p.marked{background:#ffd93d;color:#1d1d1b;font-weight:600;padding:6px 10px}
 .live-words p.marked::before{content:'★ '}
 .moment-actions button.done{background:#ffd93d;border-color:#e0b400;color:#1d1d1b}
+
+/* The transcript as paragraphs: one per speaker turn, the name once at the top. A sentence's tools appear when it's tapped. */
+.turn{margin:0 0 18px}.turn[hidden]{display:none}
+.turn-head{display:flex;align-items:center;gap:8px;margin:0 0 4px}
+.turn-head .speaker-label{font-size:13px!important;font-weight:600;color:var(--ink)}
+.turn-text{margin:0;font-size:15px;line-height:1.75}
+.turn .transcript-line{display:inline;padding:0;border:0}
+.turn .transcript-line[hidden]{display:none}
+.turn .transcript-line .passage-text{cursor:pointer;border-radius:4px}
+.turn .transcript-line .passage-text:hover{background:var(--soft)}
+.turn .transcript-line.active .passage-text{background:var(--soft);box-shadow:0 0 0 2px var(--soft)}
+.turn .transcript-line:focus{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.turn .line-tools{display:none}
+.turn .transcript-line.active .line-tools{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;margin:0 6px;vertical-align:middle}
+.turn .line-tools button{font-size:12px;padding:3px 7px}
+.turn .transcript-line.saved .passage-text::before{content:'★ ';color:var(--accent)}
+.turn .transcript-line.noted .passage-text::after{content:' ✎';color:var(--muted);font-size:12px}
