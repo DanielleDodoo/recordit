@@ -37,6 +37,7 @@ import {isNative,noLaptop,onPhoneWeb,startNative,stopNative,pauseNative} from '.
 import {addMoment,applyMoments,restoreMoments,removeMoment} from './moments.js';
 import {keepAwake} from './keep-awake.js';
 import {learnLength} from './audio-length.js';
+import {NAMES,RONNIE_LABEL} from './ronnie-record.js';
 import {startLiveWords} from './live-words.js';
 import {placeholderTitle,titleFromSummary} from './auto-title.js';
 import {loadGoogleSignIn,driveToken,sendToDrive} from './phone-drive.js';
@@ -144,6 +145,7 @@ function renderTranscript(){
   }catch(error){if(selected?.id===noteId)$('transcript-version').value=showing;throw error;}
  });
  const groups=voiceGroups(selected);$('name-voices').hidden=!groups.length;
+ offerRonnieNames(selected);
  // Speech the engine heard but could not turn into (enough) words is shown in place, so nothing is lost silently.
  const gaps=[...(selected.speechGaps||[])].sort((a,b)=>a.start-b.start);let nextGap=0;
  const gapHtml=g=>`<div class="speech-gap" role="note"><button class="timestamp" data-time="${g.start}">${clock(g.start)}</button> ${g.reason==='few-words'?'Fewer words than expected':'Speech heard but no words recognised'} until ${clock(g.end)}. Listen to check nothing is missing.</div>`;
@@ -344,6 +346,53 @@ function engineProgress(s){
  if(s.state==='receiving'||s.state==='decoding')return 'Preparing the audio on this laptop…';
  return `Transcribing offline on this laptop · words ${pct(s.progress.speech)} · speakers ${pct(s.progress.speakers)} · ${time}. Keep recordit open.`;
 }
+// Who said what from Ronnie's own record of the conversation (the laptop reads it from her backups in Drive):
+// {named:{chunks,ronnie,danielle,kept}} or {named:null,reason}; null when there is no laptop to ask.
+async function ronnieNames({created,duration},chunks,{split=true}={}){
+ if(noLaptop||!chunks?.length)return null;
+ try{
+  const status=await fetch('/api/status',{cache:'no-store'}).then(r=>r.ok?r.json():null);
+  if(!status?.ronnieNames)return null;
+  const response=await fetch('/api/ronnie-names',{method:'POST',headers:{'Content-Type':'application/json','X-Record-Me-Token':status.token},body:JSON.stringify({created,duration,chunks,split})});
+  return response.ok?await response.json():null;
+ }catch{return null;}
+}
+// A transcript made before her record was used (or before it was backed up) can take its names in one tap. The
+// button only shows when her record has this conversation; it makes a new transcript version, so the old one is kept.
+// Passages are only split where both spoke if nothing is marked on them yet (marks are tied to passages).
+const ronnieChecks=new Map();
+const hasMarks=note=>Boolean(note.bookmarks?.length||note.comments?.length||note.highlights?.length);
+function offerRonnieNames(note){
+ const button=$('ronnie-names'),version=note.transcriptVersionId||'original',key=note.id+'|'+version;
+ button.hidden=true;
+ if(noLaptop||!note.chunks?.length||note.chunks.some(c=>c.speaker===NAMES.assistant))return;
+ const check=ronnieChecks.get(key);
+ if(!check||(!check.named&&Date.now()-check.at>600_000)){
+  const entry={at:Date.now(),named:false};
+  entry.result=ronnieNames(note,note.chunks,{split:!hasMarks(note)}).then(r=>{entry.named=Boolean(r?.named);return r;});
+  ronnieChecks.set(key,entry);
+ }
+ ronnieChecks.get(key).result.then(r=>{if(selected?.id===note.id&&(selected.transcriptVersionId||'original')===version)button.hidden=!r?.named;});
+ button.onclick=run(async()=>{
+  const noteId=note.id,before=sourceKey(note);button.disabled=true;
+  try{
+   const r=await ronnieNames(note,note.chunks,{split:!hasMarks(note)});
+   if(!r?.named)throw Error(r?.reason==='not-backed-up-yet'?'Ronnie’s record of this conversation isn’t backed up yet. Try again after her next backup.':'Ronnie’s record doesn’t have this conversation. Your transcript is unchanged.');
+   const fresh=await db.editAnswers(noteId,n=>{
+    if((n.transcriptVersionId||'original')!==version||sourceKey(n)!==before)throw Error('This transcript changed. Reopen it and try again.');
+    const summary=n.generatedSummary;
+    applyTranscription(n,{chunks:r.named.chunks,transcript:n.transcript,engine:n.transcriptEngine,engineLabel:(n.transcriptEngineLabel||'Transcript')+RONNIE_LABEL,gaps:n.speechGaps,duration:n.duration},{now:Date.now(),versionId:crypto.randomUUID()});
+    if(summary?.sourceKey===sourceKey(n))n.generatedSummary=summary;   // same passages, so the summary still fits
+    applyMoments(n);
+   });
+   if(!fresh)throw Error('This conversation no longer exists.');
+   await refresh();scheduleSync();
+   const {ronnie,danielle,kept}=r.named,message=`Named from Ronnie’s record: ${ronnie} passage${ronnie===1?'':'s'} Ronnie, ${danielle} you${kept?`; ${kept} outside your conversation with her are left as they were`:''}. The previous version is kept under “Transcript version”.`;
+   if(selected?.id===noteId){await openNote(noteId);job(message);}else toast(message);
+   if(!noLaptop&&!fresh.generatedSummary)await summarise(fresh).catch(()=>{});
+  }finally{button.disabled=false;}
+ });
+}
 async function engineTranscribe(blob,status,people=0){
  if(busy)throw Error('Please wait for the current AI task to finish.');
  busy=true;$('summarise').disabled=true;$('cancel-ai').hidden=false;$('ask-submit').disabled=true;$('transcribe').disabled=true;$('attach-audio').disabled=true;
@@ -379,17 +428,20 @@ async function browserTranscribe(blob){
 // A new transcript never overwrites the old one: the current text is archived as an earlier version,
 // and the result is saved against the latest stored conversation, not the snapshot taken before transcribing.
 async function transcribe(people=0){
- const noteId=selected.id;const audio=await db.getAudio(noteId);if(!audio?.blob)throw Error('This conversation has no audio.');
+ const noteId=selected.id,{created,duration}=selected;const audio=await db.getAudio(noteId);if(!audio?.blob)throw Error('This conversation has no audio.');
  let result;
  try{const engine=await speechEngine();result=engine?await engineTranscribe(audio.blob,engine,people):await browserTranscribe(audio.blob);}
  catch(e){job(e.message);throw e;}
+ // A conversation with Ronnie: who said what comes from her own record, not from telling voices apart.
+ const ronnie=await ronnieNames({created,duration:result.duration||duration},result.chunks);
+ if(ronnie?.named)result={...result,chunks:ronnie.named.chunks,engineLabel:(result.engineLabel||'Transcript')+RONNIE_LABEL};
  let fresh;
  try{fresh=await db.editAnswers(noteId,n=>{applyTranscription(n,result,{now:Date.now(),versionId:crypto.randomUUID()});applyMoments(n);autoFile(n);});}
  catch(e){job(e.message);throw e;}
  if(!fresh){const message='This conversation was deleted while transcribing, so the new transcript was not saved.';job(message);throw Error(message);}
  await refresh();scheduleSync();
  const gaps=fresh.speechGaps?.length||0,speakers=result.speakers?.length||0;
- const message='Transcript ready'+(speakers?` · ${speakers} speaker${speakers>1?'s':''} found; use Name speakers to name them`:'')+'.'+(gaps?` ${gaps} possible gap${gaps>1?'s are':' is'} marked for listening.`:'')+(result.speakerError?' Speakers could not be separated this time.':'')+(fresh.transcriptVersions?.length?' Your earlier transcript is kept under “Transcript version”.':'');
+ const message='Transcript ready'+(ronnie?.named?'. You and Ronnie are named from Ronnie’s own record':ronnie?.reason==='not-backed-up-yet'?'. Ronnie’s record of this conversation isn’t backed up yet, so voices are numbered for now; “Name from Ronnie’s record” appears once it is':speakers?` · ${speakers} speaker${speakers>1?'s':''} found; use Name speakers to name them`:'')+'.'+(gaps?` ${gaps} possible gap${gaps>1?'s are':' is'} marked for listening.`:'')+(result.speakerError?' Speakers could not be separated this time.':'')+(fresh.transcriptVersions?.length?' Your earlier transcript is kept under “Transcript version”.':'');
  if(selected?.id===noteId){await openNote(noteId);job(message);}else toast(message);
  if(!noLaptop)await summarise(fresh).catch(()=>{});
 }
